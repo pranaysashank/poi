@@ -3,8 +3,8 @@
 
 name:                poi-bin
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            The poi binary
+description:         donno why this exists
 homepage:            https://www.github.com/pranaysashank/poi
 license:             MIT
 license-file:        LICENSE

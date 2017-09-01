@@ -12,7 +12,7 @@ main = do
   (script:options) <- getArgs
   cd <- getCurrentDirectory
   let scriptsD = cd ++ "/scripts"
-      opts = MigrateOpts Up connectionInfo
+      opts = MigrateOpts Prepare connectionInfo
   scriptsDExists <- doesDirectoryExist scriptsD
   scripts <- if scriptsDExists then listDirectory scriptsD else return []
   putStrLn $ show $ script `elem` (map dropExtension scripts)
