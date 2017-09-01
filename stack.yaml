@@ -1,0 +1,10 @@
+resolver: lts-9.2
+
+packages:
+    - ./poi-bin
+
+extra-deps: []
+
+flags: {}
+
+extra-package-dbs: []
