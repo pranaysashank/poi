@@ -5,15 +5,17 @@
 module Migrate where
 
 import Control.Exception (try)
-import Control.Monad (forM_, void)
+import Control.Monad (filterM, void)
+import Data.ByteString.Char8 (unpack)
 import Data.Char
 import Data.Time
-import Data.ByteString.Char8 (unpack)
 import Database.PostgreSQL.Simple
+import Database.PostgreSQL.Simple.SqlQQ
+import GHC.Int
 import System.Directory (getCurrentDirectory, createDirectoryIfMissing, withCurrentDirectory)
 import System.FilePath ((</>))
+import System.Process (callCommand)
 import Text.RawString.QQ (r)
-import GHC.Int
 
 data Mode = Up | Down | Redo | Prepare | New String
 
@@ -91,18 +93,31 @@ createNewMigration migName = do
 
 upMigration :: Connection -> [Migration] -> IO ()
 upMigration conn migrations = do
-  maybeMigName <- lastRunMigration conn
-  let migs = case maybeMigName of
-               Nothing -> migrations
-               Just migName -> tail $ dropWhile (\(name, _) -> name /= migName) migrations
-  forM_ migs $ \(name, (up, _)) -> do
+  migs <- filterM didMigrationRun migrations
+  myForM_ migs $ \(name, (up, _)) -> do
     putStrLn ("Running Migration up " ++ name)
     result <- try $ execute_ conn up :: IO (Either SqlError Int64)
-    either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
-           (\b -> do
-               void $ execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
-               putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
-           result
+    either (\a -> do
+               pgDump name
+               error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
+      (\b -> do
+          void $ execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
+          putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
+      result
+  where
+    myForM_ :: [Migration] -> (Migration -> IO ()) -> IO ()
+    myForM_ [] _ = return ()
+    myForM_ [x@ (name, _)] f = do
+      f x
+      pgDump name
+    myForM_ (x:xs) f = do
+      f x
+      myForM_ xs f
+
+    didMigrationRun :: Migration -> IO Bool
+    didMigrationRun (name, _) = do
+      xs :: [String] <- query conn [sql|SELECT name FROM schema_migrations WHERE name = ? |] [name]
+      return ((not . null) xs)
 
 downMigration :: Connection -> [Migration] -> IO ()
 downMigration conn migrations = do
@@ -119,6 +134,7 @@ downMigration conn migrations = do
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
              (\b -> do
                  void $ execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
+                 pgDump name
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
   where
@@ -160,3 +176,6 @@ pascal (x:xs) = toUpper x : pascal' xs
     pascal' [y] = [y]
     pascal' (y:ys) | y == '_' = y : toUpper (head ys) : pascal' (tail ys)
                | otherwise = y : pascal' ys
+
+pgDump :: String -> IO ()
+pgDump name = callCommand $ "pg_dump -d 'vl' --file schema.sql && sed -i '1i" ++ name ++ "' schema.sql"
