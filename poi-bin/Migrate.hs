@@ -127,8 +127,7 @@ downMigration conn migrations = do
                                          | otherwise = findMig migname migs
 
 fillerText :: String
-fillerText = [r| {-# LANGUAGE QuasiQuotes #-}
-import Database.PostgreSQL.Simple
+fillerText = [r|import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.SqlQQ
 import System.Environment
 

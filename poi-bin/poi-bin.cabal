@@ -50,7 +50,7 @@ executable poi
                      , raw-strings-qq
   ghc-options:         -Wall -threaded -rtsopts
   main-is:             main.hs
-  -- other-extensions:    
+  other-modules:       Migrate
   default-language:    Haskell2010
 
 source-repository head
