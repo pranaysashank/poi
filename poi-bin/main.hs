@@ -1,21 +1,19 @@
 module Main where
 
-import System.Directory
 import System.Environment
-import System.FilePath
 import System.Process
 
 import Migrate
 
 main :: IO ()
 main = do
-  (script:options) <- getArgs
-  cd <- getCurrentDirectory
-  let scriptsD = cd ++ "/scripts"
-      opts = MigrateOpts Prepare connectionInfo
-  scriptsDExists <- doesDirectoryExist scriptsD
-  scripts <- if scriptsDExists then listDirectory scriptsD else return []
-  putStrLn $ show $ script `elem` (map dropExtension scripts)
-  putStrLn $ show scripts
-  migrate opts []
+  (e:es) <- getArgs
+  case e of
+    "prepare" -> migrate opts []
+    "up" -> callCommand "stack Migrations.hs up"
+    "down" -> callCommand "stack Migrations.hs down"
+    "new" -> callCommand ("stack Migrations.hs new " ++ head es)
+    _ -> putStrLn "Usage: poi migrate [prepare | up | down | new <name> ]"
+  where
+    opts = MigrateOpts Prepare connectionInfo
   -- callCommand ("stack " ++ scriptsD ++ "/" ++ script ++ ".hs " ++ mconcat options)
