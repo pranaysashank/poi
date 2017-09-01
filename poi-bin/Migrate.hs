@@ -37,7 +37,7 @@ migrate opts migrations= do
     Prepare -> prepareMigration conn
     New migName -> createNewMigration migName
     Up -> upMigration conn migrations
-    _ -> undefined
+    Down -> downMigration conn migrations
   close conn
 
 prepareMigration :: Connection -> IO ()
@@ -50,17 +50,30 @@ NOT NULL DEFAULT now())
   cd <- getCurrentDirectory
   let migrationsD = cd </> "migrations"
   withCurrentDirectory cd (createDirectoryIfMissing False migrationsD)
-  writeFile (cd </> "Migrations.hs") [r|{-# LANGUAGE OverloadedStrings #-}
+  writeFile (cd </> "Migrations.hs") [r|#!/usr/bin/env stack
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -F -pgmF migrate-autoimporter #-}
 
 module Migrations where
 
-import Migrate (Mode, MigrateOpts, migrate, connectionInfo)
+import Migrate (Mode(..), MigrateOpts(..), migrate, connectionInfo)
+import System.Directory
+import System.Environment
+import System.FilePath
 
 runMigrations :: Mode -> IO ()
 runMigrations mode = migrate opts migrations
   where
     opts = MigrateOpts mode connectionInfo
+
+main :: IO ()
+main = do
+  (e:es) <- getArgs
+  case e of
+    "prepare" -> runMigrations Prepare
+    "up" -> runMigrations Up
+    "down" -> runMigrations Down
+    "new" -> runMigrations (New $ head es)
 |]
 
 createNewMigration :: String -> IO ()
@@ -80,7 +93,7 @@ upMigration conn migrations = do
   maybeMigName <- lastRunMigration conn
   let migs = case maybeMigName of
                Nothing -> migrations
-               Just migName -> takeWhile (\(name, _) -> name /= migName) migrations
+               Just migName -> tail $ dropWhile (\(name, _) -> name /= migName) migrations
   forM_ migs $ \(name, (up, _)) -> do
     putStrLn ("Running Migration up " ++ name)
     result <- try $ execute_ conn up :: IO (Either SqlError Int64)
@@ -114,7 +127,7 @@ downMigration conn migrations = do
                                          | otherwise = findMig migname migs
 
 fillerText :: String
-fillerText = [r|
+fillerText = [r| {-# LANGUAGE QuasiQuotes #-}
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.SqlQQ
 import System.Environment

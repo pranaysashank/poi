@@ -1,6 +1,6 @@
 module Main where
 
-import Data.List (intercalate, isPrefixOf, isSuffixOf)
+import Data.List (intercalate, isPrefixOf, isSuffixOf, sort)
 import Data.Monoid ((<>))
 import System.Directory (getDirectoryContents, getCurrentDirectory)
 import System.Environment (getArgs)
@@ -12,7 +12,7 @@ main =
      ls <- lines <$> readFile input
      let (imports, rest) = splitImports ls
      cd <- getCurrentDirectory
-     ms' <- getDirectoryContents (cd </> "migrations")
+     ms' <- sort <$> getDirectoryContents (cd </> "migrations")
      let ms = map dropExtension $
               filter (\m -> "M" `isPrefixOf` m && ".hs" `isSuffixOf` m) ms'
      let poiImports = map (\m -> "import qualified " <> m) ms
