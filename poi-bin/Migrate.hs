@@ -116,8 +116,8 @@ upMigration conn migrations = do
 
     didMigrationRun :: Migration -> IO Bool
     didMigrationRun (name, _) = do
-      xs :: [String] <- query conn [sql|SELECT name FROM schema_migrations WHERE name = ? |] [name]
-      return ((not . null) xs)
+      xs :: [[String]] <- query conn [sql|SELECT name FROM schema_migrations WHERE name = ? |] [name]
+      return (null xs)
 
 downMigration :: Connection -> [Migration] -> IO ()
 downMigration conn migrations = do
