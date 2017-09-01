@@ -4,7 +4,7 @@
 
 module Migrate where
 
-import Control.Exception (SomeException, bracket, try)
+import Control.Exception (try)
 import Control.Monad (forM_, void)
 import Data.Char
 import Data.Time
@@ -38,11 +38,12 @@ migrate opts migrations= do
     New migName -> createNewMigration migName
     Up -> upMigration conn migrations
     Down -> downMigration conn migrations
+    _ -> putStrLn "Something other than up, down, prepare, new has been invoked."
   close conn
 
 prepareMigration :: Connection -> IO ()
 prepareMigration conn = do
-  execute_ conn [r|
+  void $ execute_ conn [r|
 CREATE TABLE IF NOT EXISTS schema_migrations (name text
 NOT NULL PRIMARY KEY, updated_at timestamp with time zone
 NOT NULL DEFAULT now())
@@ -99,7 +100,7 @@ upMigration conn migrations = do
     result <- try $ execute_ conn up :: IO (Either SqlError Int64)
     either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
            (\b -> do
-               execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
+               void $ execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
                putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
            result
 
@@ -117,7 +118,7 @@ downMigration conn migrations = do
       result <- try $ execute_ conn down :: IO (Either SqlError Int64)
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
              (\b -> do
-                 execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
+                 void $ execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
   where
