@@ -3,16 +3,16 @@ module Main where
 import System.Process
 
 import Migrate
-import Utils (Options(..), poiArgs)
+import Utils (Options(..), poiArgs, readConfigForEnv, dbConfig, MigrateArgs(..))
 
 main :: IO ()
 main = do
-  poiArgs (migs opts)
-  where
-    opts = MigrateOpts Prepare connectionInfo
+  poiArgs (migs)
 
-migs :: MigrateOpts -> Options -> IO ()
-migs opts (Options mode) = do
+migs :: Options -> IO ()
+migs (Options (MigrateArgs mode env)) = do
+  config <- readConfigForEnv env
+  let opts = MigrateOpts Prepare (dbConfig config)
   case mode of
     Prepare -> migrate opts []
     Up -> callCommand "stack Migrations.hs up"

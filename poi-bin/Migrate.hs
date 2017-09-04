@@ -63,12 +63,13 @@ import Migrate (Mode(..), MigrateOpts(..), migrate, connectionInfo)
 import System.Directory
 import System.Environment
 import System.FilePath
-import Utils (migArgs)
+import Utils (migArgs, readConfigForEnv, dbConfig, MigrateArgs(..))
 
-runMigrations :: Mode -> IO ()
-runMigrations mode = migrate opts migrations
-  where
-    opts = MigrateOpts mode connectionInfo
+runMigrations :: MigrateArgs -> IO ()
+runMigrations (MigrateArgs mode env) = do
+   config <- readConfigForEnv env
+   let opts = MigrateOpts mode (dbConfig config)
+   migrate opts migrations
 
 main :: IO ()
 main = migArgs runMigrations

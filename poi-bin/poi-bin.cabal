@@ -26,6 +26,8 @@ library
                      , bytestring
                      , text
                      , process
+                     , containers
+                     , yaml
                      , postgresql-simple
                      , optparse-applicative
                      , time
@@ -46,7 +48,9 @@ executable poi
                      , filepath
                      , bytestring
                      , text
+                     , containers
                      , process
+                     , yaml
                      , postgresql-simple
                      , time
                      , raw-strings-qq
