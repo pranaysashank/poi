@@ -1,6 +1,5 @@
 module Main where
 
-import System.Environment
 import System.Process
 
 import Migrate
