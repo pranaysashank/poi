@@ -11,8 +11,8 @@ import Data.Char
 import Data.Time
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.SqlQQ
-import GHC.Int
-import System.Directory (getCurrentDirectory, createDirectoryIfMissing, withCurrentDirectory)
+import GHC.Int (Int64)
+import System.Directory (removeFile, getCurrentDirectory, createDirectoryIfMissing, withCurrentDirectory)
 import System.FilePath ((</>))
 import System.Process (callCommand)
 import Text.RawString.QQ (r)
@@ -40,7 +40,7 @@ migrate opts migrations= do
     New migName -> createNewMigration migName
     Up -> upMigration conn migrations
     Down -> downMigration conn migrations
-    _ -> putStrLn "Something other than up, down, prepare, new has been invoked."
+    Redo -> redoMigration conn migrations
   close conn
 
 prepareMigration :: Connection -> IO ()
@@ -133,7 +133,7 @@ downMigration conn migrations = do
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
              (\b -> do
                  void $ execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
-                 join $ fmap (maybe (return ()) pgDump) (lastRunMigration conn)
+                 join $ fmap (maybe (removeFile "schema.sql") pgDump) (lastRunMigration conn)
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
   where
@@ -141,6 +141,11 @@ downMigration conn migrations = do
     findMig _ [] = Nothing
     findMig migname (m@(name, _) : migs) | migname == name = Just m
                                          | otherwise = findMig migname migs
+
+redoMigration :: Connection -> [Migration] -> IO ()
+redoMigration conn migrations = do
+  downMigration conn migrations
+  upMigration conn migrations
 
 fillerText :: String
 fillerText = [r|import Database.PostgreSQL.Simple
