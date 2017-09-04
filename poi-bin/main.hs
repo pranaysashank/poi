@@ -14,9 +14,9 @@ main = do
 
 migs :: MigrateOpts -> Options -> IO ()
 migs opts (Options mode) = do
-case mode of
-  Prepare -> migrate opts []
-  Up -> callCommand "stack Migrations.hs up"
-  Down -> callCommand "stack Migrations.hs down"
-  New xs -> callCommand ("stack Migrations.hs new " ++ xs)
-  Redo -> callCommand ("stack Migrations.hs redo")
+  case mode of
+    Prepare -> migrate opts []
+    Up -> callCommand "stack Migrations.hs up"
+    Down -> callCommand "stack Migrations.hs down"
+    New xs -> callCommand ("stack Migrations.hs new " ++ xs)
+    Redo -> callCommand ("stack Migrations.hs redo")
