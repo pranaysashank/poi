@@ -19,6 +19,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      .
   exposed-modules:     Migrate
+                     , Utils
   build-depends:       base >= 4.7 && < 5
                      , directory
                      , filepath
@@ -26,6 +27,7 @@ library
                      , text
                      , process
                      , postgresql-simple
+                     , optparse-applicative
                      , time
                      , raw-strings-qq
   default-language:    Haskell2010
@@ -48,6 +50,7 @@ executable poi
                      , postgresql-simple
                      , time
                      , raw-strings-qq
+                     , optparse-applicative
   ghc-options:         -Wall -threaded -rtsopts
   main-is:             main.hs
   other-modules:       Migrate

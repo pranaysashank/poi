@@ -63,6 +63,7 @@ import Migrate (Mode(..), MigrateOpts(..), migrate, connectionInfo)
 import System.Directory
 import System.Environment
 import System.FilePath
+import Utils (migArgs)
 
 runMigrations :: Mode -> IO ()
 runMigrations mode = migrate opts migrations
@@ -70,13 +71,7 @@ runMigrations mode = migrate opts migrations
     opts = MigrateOpts mode connectionInfo
 
 main :: IO ()
-main = do
-  (e:es) <- getArgs
-  case e of
-    "prepare" -> runMigrations Prepare
-    "up" -> runMigrations Up
-    "down" -> runMigrations Down
-    "new" -> runMigrations (New $ head es)
+main = migArgs runMigrations
 |]
 
 createNewMigration :: String -> IO ()
