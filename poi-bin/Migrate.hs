@@ -5,7 +5,7 @@
 module Migrate where
 
 import Control.Exception (try)
-import Control.Monad (filterM, void)
+import Control.Monad (join, filterM, void)
 import Data.ByteString.Char8 (unpack)
 import Data.Char
 import Data.Time
@@ -121,10 +121,9 @@ upMigration conn migrations = do
 
 downMigration :: Connection -> [Migration] -> IO ()
 downMigration conn migrations = do
-  maybeMigName <- lastRunMigration conn
-  let migName = case maybeMigName of
-                  Nothing -> error "There was no last run migration to roll down."
-                  Just gb -> gb
+  migName <- fmap (maybe (error "There was no last run migration to roll down.")
+                          (id))
+                  (lastRunMigration conn)
   let mig = findMig migName migrations
   case mig of
     Nothing -> putStrLn $ "Last run migration not found. Aborting."
@@ -134,7 +133,7 @@ downMigration conn migrations = do
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
              (\b -> do
                  void $ execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
-                 pgDump name
+                 join $ fmap (maybe (return ()) pgDump) (lastRunMigration conn)
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
   where
