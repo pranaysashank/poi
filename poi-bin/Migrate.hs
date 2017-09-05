@@ -25,9 +25,9 @@ data MigrateOpts = MigrateOpts
   }
 
 connectionInfo :: ConnectInfo
-connectionInfo = defaultConnectInfo { connectDatabase = "vl"
+connectionInfo = defaultConnectInfo { connectDatabase = "postgres"
                                     , connectPassword = "password"
-                                    , connectUser = "vacationlabs"
+                                    , connectUser = "postgres"
                                     }
 
 type Migration = (String, (Query, Query))
@@ -41,7 +41,10 @@ migrate opts migrations= do
                            Up -> upMigration conn migrations
                            Down -> downMigration conn migrations
                            Redo -> redoMigration conn migrations
-  join $ fmap (maybe (removeFile "schema.sql") (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
+  case migration opts of
+    Up -> join $ fmap (maybe (removeFile "schema.sql") (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
+    Down -> join $ fmap (maybe (removeFile "schema.sql") (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
+    _ -> return ()
   close conn
 
 prepareMigration :: Connection -> IO ()
@@ -59,7 +62,7 @@ NOT NULL PRIMARY KEY, updated_at timestamp with time zone
 NOT NULL DEFAULT now());
 |]
   cd <- getCurrentDirectory
-  let migrationsD = cd </> "migrations"
+  let migrationsD = cd </> "Migrations"
   withCurrentDirectory cd (createDirectoryIfMissing False migrationsD)
   writeFile (cd </> "Migrations.hs") [r|#!/usr/bin/env stack
 {-# LANGUAGE OverloadedStrings #-}
