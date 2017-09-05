@@ -4,15 +4,15 @@
 
 module Migrate where
 
-import Control.Exception (try)
-import Control.Monad (join, filterM, void)
+import Control.Exception (finally, try)
+import Control.Monad (when, join, filterM, void)
 import Data.ByteString.Char8 (unpack)
 import Data.Char
 import Data.Time
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.SqlQQ
 import GHC.Int (Int64)
-import System.Directory (removeFile, getCurrentDirectory, createDirectoryIfMissing, withCurrentDirectory)
+import System.Directory (doesFileExist, removeFile, getCurrentDirectory, createDirectoryIfMissing, withCurrentDirectory)
 import System.FilePath ((</>))
 import System.Process (callCommand)
 import Text.RawString.QQ (r)
@@ -35,17 +35,18 @@ type Migration = (String, (Query, Query))
 migrate :: MigrateOpts -> [Migration] -> IO ()
 migrate opts migrations= do
   conn <- connect $ environment opts
-  withTransaction conn $ case migration opts of
-                           Prepare -> prepareMigration conn
-                           New migName -> createNewMigration migName
-                           Up -> upMigration conn migrations
-                           Down -> downMigration conn migrations
-                           Redo -> redoMigration conn migrations
-  case migration opts of
-    Up -> join $ fmap (maybe (removeFile "schema.sql") (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
-    Down -> join $ fmap (maybe (removeFile "schema.sql") (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
-    _ -> return ()
-  close conn
+  finally (case migration opts of
+              Prepare -> prepareMigration conn
+              New migName -> createNewMigration migName
+              Up -> upMigration conn migrations
+              Down -> downMigration conn migrations
+              Redo -> redoMigration conn migrations)
+          (do fileExists <- doesFileExist "schema.sql"
+              case migration opts of
+                Up -> join $ fmap (maybe (when fileExists (removeFile "schema.sql")) (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
+                Down -> join $ fmap (maybe (when fileExists (removeFile "schema.sql")) (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
+                _ -> return ()
+              close conn)
 
 prepareMigration :: Connection -> IO ()
 prepareMigration conn = do
@@ -101,15 +102,7 @@ createNewMigration migName = do
 upMigration :: Connection -> [Migration] -> IO ()
 upMigration conn migrations = do
   migs <- filterM didMigrationRun migrations
-  myForM_ migs $ \(name, (up, _)) -> do
-    putStrLn ("Running Migration up " ++ name)
-    result <- try $ execute_ conn up :: IO (Either SqlError Int64)
-    either (\a -> do
-               error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
-      (\b -> do
-          void $ execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
-          putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
-      result
+  myForM_ migs (\mig -> withTransaction conn (runMigration conn Up mig))
   where
     myForM_ :: [Migration] -> (Migration -> IO ()) -> IO ()
     myForM_ [] _ = return ()
@@ -132,7 +125,20 @@ downMigration conn migrations = do
   let mig = findMig migName migrations
   case mig of
     Nothing -> putStrLn $ "Last run migration not found. Aborting."
-    Just (name, (_, down)) -> do
+    Just migRun -> withTransaction conn (runMigration conn Down migRun)
+
+runMigration :: Connection -> Mode -> Migration -> IO ()
+runMigration conn mode (name,(up, down)) =
+  case mode of
+    Up -> do
+      putStrLn ("Running Migration up " ++ name)
+      result <- try $ execute_ conn up :: IO (Either SqlError Int64)
+      either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
+             (\b -> do
+                 void $ execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
+                 putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
+             result
+    Down -> do
       putStrLn ("Running Migration down " ++ name)
       result <- try $ execute_ conn down :: IO (Either SqlError Int64)
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
@@ -140,16 +146,19 @@ downMigration conn migrations = do
                  void $ execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
-  where
-    findMig :: String -> [Migration] -> Maybe Migration
-    findMig _ [] = Nothing
-    findMig migname (m@(name, _) : migs) | migname == name = Just m
-                                         | otherwise = findMig migname migs
+    _ -> do putStrLn "You should have never reached this far"
 
 redoMigration :: Connection -> [Migration] -> IO ()
 redoMigration conn migrations = do
-  downMigration conn migrations
-  upMigration conn migrations
+  migName <- fmap (maybe (error "There was no last run migration to redo.")
+                          (id))
+                  (lastRunMigration conn)
+  let mig = findMig migName migrations
+  case mig of
+    Nothing -> putStrLn $ "Last run migration not found. Aborting."
+    Just migRun -> withTransaction conn $ do
+      runMigration conn Down migRun
+      runMigration conn Up migRun
 
 fillerText :: String
 fillerText = [r|import Database.PostgreSQL.Simple
@@ -187,3 +196,8 @@ pascal (x:xs) = toUpper x : pascal' xs
 
 pgDump :: String -> String -> IO ()
 pgDump db name = callCommand $ "pg_dump -d '" ++ db ++ "' --file schema.sql && sed -i '1i" ++ name ++ "' schema.sql"
+
+findMig :: String -> [Migration] -> Maybe Migration
+findMig _ [] = Nothing
+findMig migname (m@(name, _) : migs) | migname == name = Just m
+                                     | otherwise = findMig migname migs

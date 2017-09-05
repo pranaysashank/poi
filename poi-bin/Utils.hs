@@ -8,7 +8,7 @@ import           Data.Yaml (FromJSON(..), (.:))
 import qualified Data.Yaml as Y
 import           Data.Yaml.Config (loadYamlSettings, ignoreEnv)
 import           Database.PostgreSQL.Simple (ConnectInfo(..))
-import           Migrate (Mode(..), MigrateOpts (..))
+import           Migrate (Mode(..))
 import           Options.Applicative
 import           System.Environment (getEnv)
 
@@ -121,6 +121,7 @@ instance FromJSON Config where
   parseJSON (Y.Object v) = Config
      <$> v .: "database"
      <*> (pure undefined) -- will be filled from the read config function
+  parseJSON _ = error $ "unable to parse config.yml"
 
 readConfigForEnv :: EnvName -> IO Config
 readConfigForEnv ename = do

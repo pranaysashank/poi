@@ -1,6 +1,6 @@
 module Main where
 
-import System.Process
+import System.Process (callCommand)
 
 import Migrate
 import Utils (Options(..), poiArgs, readConfigForEnv, dbConfig, MigrateArgs(..))
