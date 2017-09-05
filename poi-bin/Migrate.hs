@@ -35,20 +35,28 @@ type Migration = (String, (Query, Query))
 migrate :: MigrateOpts -> [Migration] -> IO ()
 migrate opts migrations= do
   conn <- connect $ environment opts
-  case migration opts of
-    Prepare -> prepareMigration conn
-    New migName -> createNewMigration migName
-    Up -> upMigration conn migrations
-    Down -> downMigration conn migrations
-    Redo -> redoMigration conn migrations
+  withTransaction conn $ case migration opts of
+                           Prepare -> prepareMigration conn
+                           New migName -> createNewMigration migName
+                           Up -> upMigration conn migrations
+                           Down -> downMigration conn migrations
+                           Redo -> redoMigration conn migrations
+  join $ fmap (maybe (removeFile "schema.sql") (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
   close conn
 
 prepareMigration :: Connection -> IO ()
 prepareMigration conn = do
   void $ execute_ conn [r|
+CREATE OR REPLACE FUNCTION trg_update_modified_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
 CREATE TABLE IF NOT EXISTS schema_migrations (name text
 NOT NULL PRIMARY KEY, updated_at timestamp with time zone
-NOT NULL DEFAULT now())
+NOT NULL DEFAULT now());
 |]
   cd <- getCurrentDirectory
   let migrationsD = cd </> "migrations"
@@ -78,14 +86,14 @@ main = migArgs runMigrations
 createNewMigration :: String -> IO ()
 createNewMigration migName = do
   cd <- getCurrentDirectory
-  let migrationsD = cd </> "migrations"
+  let migrationsD = cd </> "Migrations"
   time <- getCurrentTime
   let moduleName = "M" ++ formatTime defaultTimeLocale timeFormat time ++ "_" ++ pascal migName
       migFile = migrationsD </> (moduleName ++ ".hs")
   putStrLn migFile
   writeFile migFile (([r|{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
-|] ++ "module " ++ moduleName ++ " where \n") ++ fillerText)
+|] ++ "module Migrations." ++ moduleName ++ " where \n") ++ fillerText)
 
 upMigration :: Connection -> [Migration] -> IO ()
 upMigration conn migrations = do
@@ -94,7 +102,6 @@ upMigration conn migrations = do
     putStrLn ("Running Migration up " ++ name)
     result <- try $ execute_ conn up :: IO (Either SqlError Int64)
     either (\a -> do
-               pgDump name
                error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
       (\b -> do
           void $ execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
@@ -103,9 +110,8 @@ upMigration conn migrations = do
   where
     myForM_ :: [Migration] -> (Migration -> IO ()) -> IO ()
     myForM_ [] _ = return ()
-    myForM_ [x@ (name, _)] f = do
+    myForM_ [x@ (_, _)] f = do
       f x
-      pgDump name
     myForM_ (x:xs) f = do
       f x
       myForM_ xs f
@@ -129,7 +135,6 @@ downMigration conn migrations = do
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
              (\b -> do
                  void $ execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
-                 join $ fmap (maybe (removeFile "schema.sql") pgDump) (lastRunMigration conn)
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
   where
@@ -145,18 +150,18 @@ redoMigration conn migrations = do
 
 fillerText :: String
 fillerText = [r|import Database.PostgreSQL.Simple
-import Database.PostgreSQL.Simple.SqlQQ
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Text.InterpolatedString.Perl6 (qc)
 import System.Environment
 
 migrate :: (Query, Query)
 migrate = (up, down)
 
 up :: Query
-up = undefined
+up = [qc| |] ++ "|]" ++ [r|
 
 down :: Query
-down = undefined
-|]
+down = [qc| |] ++ "|]\n"
 
 lastRunMigration :: Connection -> IO (Maybe String)
 lastRunMigration conn = do
@@ -177,5 +182,5 @@ pascal (x:xs) = toUpper x : pascal' xs
     pascal' (y:ys) | y == '_' = y : toUpper (head ys) : pascal' (tail ys)
                | otherwise = y : pascal' ys
 
-pgDump :: String -> IO ()
-pgDump name = callCommand $ "pg_dump -d 'vl' --file schema.sql && sed -i '1i" ++ name ++ "' schema.sql"
+pgDump :: String -> String -> IO ()
+pgDump db name = callCommand $ "pg_dump -d '" ++ db ++ "' --file schema.sql && sed -i '1i" ++ name ++ "' schema.sql"
