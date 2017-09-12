@@ -4,10 +4,11 @@
 
 module Migrate where
 
-import Control.Exception (finally, try)
+import Control.Exception (finally, try, bracket)
 import Control.Monad (when, join, filterM, void)
 import Data.ByteString.Char8 (unpack)
 import Data.Char
+import Data.List (intercalate)
 import Data.Time
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.SqlQQ
@@ -17,12 +18,8 @@ import System.FilePath ((</>))
 import System.Process (callCommand)
 import Text.RawString.QQ (r)
 
-data Mode = Up | Down | Redo | Prepare | New String
-
-data MigrateOpts = MigrateOpts
-  { migration :: Mode
-  , environment :: ConnectInfo
-  }
+import Utils (timeStampFromFileName, fuzzyFilter)
+import Types
 
 connectionInfo :: ConnectInfo
 connectionInfo = defaultConnectInfo { connectDatabase = "postgres"
@@ -30,17 +27,17 @@ connectionInfo = defaultConnectInfo { connectDatabase = "postgres"
                                     , connectUser = "postgres"
                                     }
 
-type Migration = (String, (Query, Query))
 
-migrate :: MigrateOpts -> [Migration] -> IO ()
-migrate opts migrations= do
+migrate :: MigrateOpts -> [Migration] -> Maybe String -> IO ()
+migrate opts migrations ver = do
   conn <- connect $ environment opts
-  finally (case migration opts of
-              Prepare -> prepareMigration conn
-              New migName -> createNewMigration migName
-              Up -> upMigration conn migrations
-              Down -> downMigration conn migrations
-              Redo -> redoMigration conn migrations)
+  finally (maybe (case migration opts of
+                     Prepare -> prepareMigration conn
+                     New migName -> createNewMigration migName
+                     Up -> upMigration conn migrations
+                     Down -> downMigration conn migrations
+                     Redo -> redoMigration conn migrations)
+                 (\v -> runSpecificMigration conn (migration opts) migrations v) ver)
           (do fileExists <- doesFileExist "schema.sql"
               case migration opts of
                 Up -> join $ fmap (maybe (when fileExists (removeFile "schema.sql")) (pgDump ((connectDatabase . environment) opts))) (lastRunMigration conn)
@@ -58,9 +55,8 @@ BEGIN
     RETURN NEW;
 END;
 $$ language 'plpgsql';
-CREATE TABLE IF NOT EXISTS schema_migrations (name text
-NOT NULL PRIMARY KEY, updated_at timestamp with time zone
-NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS schema_migrations (version character varying(255)
+NOT NULL PRIMARY KEY);
 |]
   cd <- getCurrentDirectory
   let migrationsD = cd </> "Migrations"
@@ -71,17 +67,18 @@ NOT NULL DEFAULT now());
 
 module Migrations where
 
-import Migrate (Mode(..), MigrateOpts(..), migrate, connectionInfo)
+import Types
+import Migrate (migrate, connectionInfo)
 import System.Directory
 import System.Environment
 import System.FilePath
-import Utils (migArgs, readConfigForEnv, dbConfig, MigrateArgs(..))
+import Utils (migArgs, readConfigForEnv, dbConfig)
 
 runMigrations :: MigrateArgs -> IO ()
-runMigrations (MigrateArgs mode env) = do
+runMigrations (MigrateArgs mode env ver) = do
    config <- readConfigForEnv env
    let opts = MigrateOpts mode (dbConfig config)
-   migrate opts migrations
+   migrate opts migrations ver
 
 main :: IO ()
 main = migArgs runMigrations
@@ -114,7 +111,7 @@ upMigration conn migrations = do
 
     didMigrationRun :: Migration -> IO Bool
     didMigrationRun (name, _) = do
-      xs :: [[String]] <- query conn [sql|SELECT name FROM schema_migrations WHERE name = ? |] [name]
+      xs :: [Only String] <- query conn [sql|SELECT version FROM schema_migrations WHERE version = ? |] [timeStampFromFileName name]
       return (null xs)
 
 downMigration :: Connection -> [Migration] -> IO ()
@@ -128,14 +125,14 @@ downMigration conn migrations = do
     Just migRun -> withTransaction conn (runMigration conn Down migRun)
 
 runMigration :: Connection -> Mode -> Migration -> IO ()
-runMigration conn mode (name,(up, down)) =
+runMigration conn mode m@(name,(up, down)) =
   case mode of
     Up -> do
       putStrLn ("Running Migration up " ++ name)
       result <- try $ execute_ conn up :: IO (Either SqlError Int64)
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
              (\b -> do
-                 void $ execute conn [r|INSERT INTO schema_migrations VALUES (?) |] [name]
+                 void $ execute conn [r|INSERT INTO schema_migrations SELECT ? WHERE NOT EXISTS (SELECT version FROM schema_migrations WHERE version=?)|] (timeStampFromFileName name, timeStampFromFileName name)
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
     Down -> do
@@ -143,10 +140,27 @@ runMigration conn mode (name,(up, down)) =
       result <- try $ execute_ conn down :: IO (Either SqlError Int64)
       either (\a -> error $ "The Migration " ++ name ++ " could not be run. Aborting.\n" ++ (unpack $ sqlErrorMsg a))
              (\b -> do
-                 void $ execute conn [r|DELETE FROM schema_migrations WHERE name=? |] [name]
+                 void $ execute conn [r|DELETE FROM schema_migrations WHERE version=? |] [timeStampFromFileName name]
                  putStrLn $ "The Migration " ++ name ++ " successfully ran. " ++ show b ++ " rows affected.")
              result
+    Redo -> do
+      runMigration conn Down m
+      runMigration conn Up m
     _ -> do putStrLn "You should have never reached this far"
+
+runSpecificMigration :: Connection -> Mode -> [Migration] -> String -> IO ()
+runSpecificMigration conn mode migrations mig = do
+  let matches = fuzzyFilter mig migrations
+  case matches of
+    []  -> putStrLn $ "Given " ++ mig ++ " didn't match any existing migrations."
+    [x] -> do
+     putStr $ "Run migration " ++ (fst x) ++ " (y or n)? "
+     reply <- getLine
+     if reply == "y"
+        then withTransaction conn (runMigration conn mode x)
+        else putStrLn "Migration aborted."
+    xs  -> putStrLn $ "Found these migrations, be more specific. \n" ++ intercalate "\n" (map (show . fst) xs)
+
 
 redoMigration :: Connection -> [Migration] -> IO ()
 redoMigration conn migrations = do
@@ -169,18 +183,20 @@ import System.Environment
 migrate :: (Query, Query)
 migrate = (up, down)
 
+-- TODO: Insert your raw SQL just before the closing `| ])` tag
 up :: Query
 up = [qc| |] ++ "|]" ++ [r|
 
+-- TODO: Insert your raw SQL just before the closing `| ])` tag
 down :: Query
 down = [qc| |] ++ "|]\n"
 
 lastRunMigration :: Connection -> IO (Maybe String)
 lastRunMigration conn = do
-  xs ::[(String,UTCTime)] <- query_ conn ("SELECT name, updated_at FROM schema_migrations ORDER BY updated_at DESC LIMIT 1")
+  xs ::[Only String] <- query_ conn ("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
   if null xs
      then return Nothing
-     else (\[(name, _)] -> return $ Just name) xs
+     else return $ Just ((\(Only n) -> n) $ head xs)
 
 timeFormat :: String
 timeFormat = "%Y%m%d%H%M%S"
@@ -199,5 +215,11 @@ pgDump db name = callCommand $ "pg_dump -d '" ++ db ++ "' --file schema.sql && s
 
 findMig :: String -> [Migration] -> Maybe Migration
 findMig _ [] = Nothing
-findMig migname (m@(name, _) : migs) | migname == name = Just m
+findMig migname (m@(name, _) : migs) | migname == (timeStampFromFileName name) = Just m
                                      | otherwise = findMig migname migs
+
+prepareMigrationWithConfig :: ConnectInfo -> IO ()
+prepareMigrationWithConfig connection = do
+  bracket (connect connection)
+          (close)
+          (prepareMigration)

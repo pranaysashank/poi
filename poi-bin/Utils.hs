@@ -2,24 +2,19 @@
 
 module Utils where
 
+import           Data.Char (toLower)
+import           Data.List (foldl', sortOn)
+import qualified Data.Ord
 import qualified Data.Map.Strict as DM
+import           Data.Maybe (mapMaybe)
 import           Data.Monoid
 import           Data.Yaml (FromJSON(..), (.:))
 import qualified Data.Yaml as Y
 import           Data.Yaml.Config (loadYamlSettings, ignoreEnv)
 import           Database.PostgreSQL.Simple (ConnectInfo(..))
-import           Migrate (Mode(..))
 import           Options.Applicative
 import           System.Environment (getEnv)
-
-data Migrate
-
-data Options = Options { poiMigrate :: MigrateArgs
-                       }
-
-data MigrateArgs = MigrateArgs { migMode :: Mode
-                               , migEnvironment :: String
-                               }
+import           Types
 
 up :: Parser Mode
 up = pure Up
@@ -50,10 +45,20 @@ migrateOpts = MigrateArgs <$> modeOpts
                           <*> strOption
                           ( long "env"
                          <> short 'e'
-                         <> help "prod or dev environment"
+                         <> help "production or development environment"
                          <> metavar "ENVIRONMENT"
                          <> showDefault
                          <> value "development")
+                          <*> (gg <$> strOption
+                          ( long "version"
+                         <> short 'v'
+                         <> help "Fuzzy matches the specific migration to run."
+                         <> metavar "VERSION"
+                         <> value ""))
+  where
+    gg :: String -> Maybe String
+    gg "" = Nothing
+    gg a = Just a
 
 options :: Parser Options
 options = Options <$> migrateOpts
@@ -78,17 +83,18 @@ migArgs f = f =<< execParser opts
          ( fullDesc
          <> progDesc "Runs migrations")
 
--- main :: IO ()
--- main = poiArgs greet
+main :: IO ()
+main = poiArgs greet
 
--- greet :: Options -> IO ()
--- greet (Options (MigrateArgs mode env)) = do case mode of
---                                                     Up -> putStrLn "Up"
---                                                     Down -> putStrLn "Down"
---                                                     Redo -> putStrLn "Redo"
---                                                     New x -> putStrLn $ "New " ++ x
---                                                     Prepare -> putStrLn "Prepare"
---                                             putStrLn env
+greet :: Options -> IO ()
+greet (Options (MigrateArgs mode env ver)) = do case mode of
+                                                        Up -> putStrLn "Up"
+                                                        Down -> putStrLn "Down"
+                                                        Redo -> putStrLn "Redo"
+                                                        New x -> putStrLn $ "New " ++ x
+                                                        Prepare -> putStrLn "Prepare"
+                                                putStrLn env
+                                                putStrLn $ show ver
 
 --
 -- DB Config
@@ -135,3 +141,43 @@ readConfig = (getEnv "APP_ENV") >>= readConfigForEnv
 
 dbConfig :: Config -> ConnectInfo
 dbConfig c = getConnectInfo (getDbConfig c)
+
+timeStampFromFileName :: String -> String
+timeStampFromFileName name@(x:xs) | x == 'M' = takeWhile (\c -> c /= '_') xs
+                                  | otherwise = error ("File not properly named " ++ name ++ ".")
+timeStampFromFileName _ = error ("Invalid file name")
+
+match :: String       -- ^ The pattern to match against
+      -> String       -- ^ The value containing the text to search in
+      -> Maybe (String, Int)
+match p t =
+    if null p then Nothing else Just (t, totalScore)
+  where
+    (s', pattern') = let f = map toLower
+                     in (f t, f p)
+    (totalScore, _, _, _) =
+      foldl'
+       (\(tot, cur, res, pat) c ->
+          case splitAtPrefix pat of
+            Nothing -> (tot, 0, res ++ [c], pat)
+            Just (x, xs) ->
+              if x == c
+                 then let cur' = cur * 2 + 1
+                      in (tot + cur', cur', res ++ [c], xs)
+                 else (tot, 0, res ++ [c], pat)
+       ) (0, 0, "", pattern') s'
+
+fuzzyFilter :: String -> [Migration] -> [Migration]
+fuzzyFilter pat xs = map fst $ bestMatch $ filter ((> 0) . snd) $ sortOn (Data.Ord.Down . snd) $
+  mapMaybe (\x@(t, _) -> maybe (Nothing) (\(_, score) -> Just (x, score)) (match pat t)) xs
+
+bestMatch :: [(Migration, Int)] -> [(Migration, Int)]
+bestMatch [] = []
+bestMatch (x : []) = [x]
+bestMatch (x : y : z) = if (snd x) > (snd y)
+                           then [x]
+                           else x : y : bestMatch z
+
+splitAtPrefix :: [t] -> Maybe (t, [t])
+splitAtPrefix [] = Nothing
+splitAtPrefix (x:xs) = Just (x, xs)
