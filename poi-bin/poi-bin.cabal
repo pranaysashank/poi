@@ -17,10 +17,10 @@ cabal-version:       >=1.10
 
 
 library
-  hs-source-dirs:      .
-  exposed-modules:     Migrate
-                     , Utils
-                     , Types
+  hs-source-dirs:      src
+  exposed-modules:     Poi.Migrations.Migrate
+                     , Poi.Migrations.Utils
+                     , Poi.Migrations.Types
   build-depends:       base >= 4.7 && < 5
                      , directory
                      , filepath
@@ -33,12 +33,16 @@ library
                      , optparse-applicative
                      , time
                      , raw-strings-qq
+                     , interpolatedstring-perl6
+                     , ansi-terminal
   default-language:    Haskell2010
 
 executable migrate-autoimporter
   build-depends:       base >= 4.7 && < 5
                      , directory
                      , filepath
+                     , yaml
+                     , interpolatedstring-perl6
   ghc-options:       -Wall
   main-is:           MigrateAutoImporter.hs
   default-language:  Haskell2010
@@ -56,11 +60,11 @@ executable poi
                      , time
                      , raw-strings-qq
                      , optparse-applicative
+                     , interpolatedstring-perl6
+                     , ansi-terminal
+                     , poi-bin
   ghc-options:         -Wall -threaded -rtsopts
   main-is:             main.hs
-  other-modules:       Migrate
-                     , Utils
-                     , Types
   default-language:    Haskell2010
 
 source-repository head

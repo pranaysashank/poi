@@ -1,20 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Utils where
+module Poi.Migrations.Utils where
 
+import           Control.Exception
 import           Data.Char (toLower)
-import           Data.List (foldl', sortOn)
-import qualified Data.Ord
+import           Data.List (findIndex, foldl', sortOn)
 import qualified Data.Map.Strict as DM
 import           Data.Maybe (mapMaybe)
 import           Data.Monoid
+import qualified Data.Ord
 import           Data.Yaml (FromJSON(..), (.:))
 import qualified Data.Yaml as Y
 import           Data.Yaml.Config (loadYamlSettings, ignoreEnv)
 import           Database.PostgreSQL.Simple (ConnectInfo(..))
 import           Options.Applicative
+import           Poi.Migrations.Types
+import           System.Console.ANSI
+import           System.Directory (getDirectoryContents)
 import           System.Environment (getEnv)
-import           Types
 
 up :: Parser Mode
 up = pure Up
@@ -30,6 +33,17 @@ prepare = pure Prepare
 
 new :: Parser Mode
 new = New <$> argument str (metavar "name")
+          <*> (   flag' Sql (long "sql" <> help "Create a SQL migration file")
+              <|> flag' Yaml (long "yaml" <> help "Create an Yaml migration file")
+              <|> flag Hs Hs (long "hs" <> help "Default. Creates a haskell migration file."))
+
+status :: Parser Mode
+status = pure Status
+
+sqlFileType, hsFileType, yamlFileType :: Parser FileType
+sqlFileType = pure Sql
+hsFileType = pure Hs
+yamlFileType = pure Yaml
 
 modeOpts :: Parser Mode
 modeOpts = subparser
@@ -38,6 +52,7 @@ modeOpts = subparser
                 <> command "redo" (info redo (progDesc "Redoes the last migration run"))
                 <> command "new" (info new (progDesc "Create a new migration in migrations directory"))
                 <> command "prepare" (info prepare (progDesc "Creates schema_migrations table, migrations directory and Migrations.hs file"))
+                <> command "status" (info status (progDesc "Shows the status of Migrations that are run."))
                 )
 
 migrateOpts :: Parser MigrateArgs
@@ -91,8 +106,9 @@ greet (Options (MigrateArgs mode env ver)) = do case mode of
                                                         Up -> putStrLn "Up"
                                                         Down -> putStrLn "Down"
                                                         Redo -> putStrLn "Redo"
-                                                        New x -> putStrLn $ "New " ++ x
+                                                        New x f -> putStrLn $ "New " ++ x ++ " " ++ (show f)
                                                         Prepare -> putStrLn "Prepare"
+                                                        Status -> putStrLn "Status"
                                                 putStrLn env
                                                 putStrLn $ show ver
 
@@ -127,7 +143,7 @@ instance FromJSON Config where
   parseJSON (Y.Object v) = Config
      <$> v .: "database"
      <*> (pure undefined) -- will be filled from the read config function
-  parseJSON _ = error $ "unable to parse config.yml"
+  parseJSON _ = fail $ "unable to parse config.yml"
 
 readConfigForEnv :: EnvName -> IO Config
 readConfigForEnv ename = do
@@ -137,7 +153,17 @@ readConfigForEnv ename = do
     Nothing -> error $ "Config section for APP_ENV='" ++ ename ++ "' not found. Have you mis-spelt it? Does the section exist in config.yml?"
 
 readConfig :: IO Config
-readConfig = (getEnv "APP_ENV") >>= readConfigForEnv
+readConfig =  readEnvName >>= readConfigForEnv
+
+readEnvName :: IO EnvName
+readEnvName = (getEnv "APP_ENV")
+
+readConfigWithDefault :: String -> IO Config
+readConfigWithDefault ename = do
+  result <- try $ getEnv "APP_ENV" :: IO (Either SomeException String)
+  either (\_ -> readConfigForEnv ename)
+         (\en -> readConfigForEnv en)
+         result
 
 dbConfig :: Config -> ConnectInfo
 dbConfig c = getConnectInfo (getDbConfig c)
@@ -146,6 +172,13 @@ timeStampFromFileName :: String -> String
 timeStampFromFileName name@(x:xs) | x == 'M' = takeWhile (\c -> c /= '_') xs
                                   | otherwise = error ("File not properly named " ++ name ++ ".")
 timeStampFromFileName _ = error ("Invalid file name")
+
+fileNameFromTimeStamp :: String -> IO (Maybe String)
+fileNameFromTimeStamp name = do
+  files <- getDirectoryContents "./Migrations"
+  let xs = map (\f@(x:_) -> if x /= 'M' then "" else timeStampFromFileName f) files
+      ys = findIndex (== name) xs
+  return (fmap (files !!) ys)
 
 match :: String       -- ^ The pattern to match against
       -> String       -- ^ The value containing the text to search in
@@ -171,7 +204,7 @@ fuzzyFilter :: String -> [Migration] -> [Migration]
 fuzzyFilter pat xs = map fst $ bestMatch $ filter ((> 0) . snd) $ sortOn (Data.Ord.Down . snd) $
   mapMaybe (\x@(t, _) -> maybe (Nothing) (\(_, score) -> Just (x, score)) (match pat t)) xs
 
-bestMatch :: [(Migration, Int)] -> [(Migration, Int)]
+bestMatch :: [(a, Int)] -> [(a, Int)]
 bestMatch [] = []
 bestMatch (x : []) = [x]
 bestMatch (x : y : z) = if (snd x) > (snd y)
@@ -181,3 +214,11 @@ bestMatch (x : y : z) = if (snd x) > (snd y)
 splitAtPrefix :: [t] -> Maybe (t, [t])
 splitAtPrefix [] = Nothing
 splitAtPrefix (x:xs) = Just (x, xs)
+
+colorPutStrLn :: Color -> String -> IO ()
+colorPutStrLn color str = do
+    setSGR  [ SetColor Foreground Dull color
+            , SetConsoleIntensity NormalIntensity
+            ]
+    putStrLn str
+    setSGR []

@@ -2,9 +2,9 @@ module Main where
 
 import System.Process (callCommand)
 
-import Migrate (prepareMigrationWithConfig)
-import Types (Options(..), MigrateArgs(..), Mode(..))
-import Utils (poiArgs, readConfigForEnv, dbConfig)
+import Poi.Migrations.Migrate (prepareMigrationWithConfig, migrationStatusWithConfig, createNewMigration)
+import Poi.Migrations.Types (Options(..), MigrateArgs(..), Mode(..))
+import Poi.Migrations.Utils (poiArgs, readConfigForEnv, dbConfig)
 
 main :: IO ()
 main = do
@@ -15,12 +15,13 @@ migs (Options (MigrateArgs mode env ver)) = do
   config <- readConfigForEnv env
   case mode of
     Prepare -> prepareMigrationWithConfig (dbConfig config)
-    Up -> callCommand $ makeCommand "up" ver
-    Down -> callCommand $ makeCommand "down" ver
-    New xs -> callCommand $ makeCommand ("new " ++ xs) ver
-    Redo -> callCommand $ makeCommand "redo" ver
+    Up -> callCommand $ makeCommand "up"
+    Down -> callCommand $ makeCommand "down"
+    New xs ft -> createNewMigration xs ft
+    Redo -> callCommand $ makeCommand "redo"
+    Status -> migrationStatusWithConfig (dbConfig config)
   where
-    makeCommand :: String -> Maybe String -> String
-    makeCommand s ver = maybe ("stack Migrations.hs " ++ s ++ " --env " ++ env)
-                              (\v -> "stack Migrations.hs " ++ s ++ " --env " ++ env ++ " --version " ++ v)
-                              ver
+    makeCommand :: String -> String
+    makeCommand s  = maybe ("stack Migrations.hs " ++ s ++ " --env " ++ env)
+                           (\v -> "stack Migrations.hs " ++ s ++ " --env " ++ env ++ " --version " ++ v)
+                           ver
